@@ -2,17 +2,18 @@
 from typing import Optional, List
 
 # Pydantic
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, EmailStr, Field
 
 # Files
 from jwt_manager import create_token, validate_token
 from config.database import Session, engine, Base
-from models.movie import Movie
+from models.movie import Movie as MovieModel
 
 # FastAPI
 from fastapi import Depends, FastAPI, Body, HTTPException, Path, Query, Request
 from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.security import HTTPBearer
+from fastapi.encoders import jsonable_encoder
 
 app = FastAPI()
 app.title = "Mi aplicación con  FastAPI"
@@ -28,8 +29,16 @@ class JWTBearer(HTTPBearer):
             raise HTTPException(status_code=403, detail="Credenciales son invalidas")
 
 class User(BaseModel):
-    email:str
-    password:str
+    email: EmailStr = Field(default=...)
+    password:str = Field(default=...)
+    
+    class Config:
+        schema_extra = {
+            "example": {
+                "email":"admin@gmail.com",
+                "password":"admin"
+            }
+        }
 
 class Movie(BaseModel):
     id: Optional[int] = None
@@ -81,25 +90,49 @@ def login(user: User):
         token: str = create_token(user.dict())
         return JSONResponse(status_code=200, content=token)
 
-@app.get('/movies', tags=['movies'], response_model=List[Movie], status_code=200, dependencies=[Depends(JWTBearer())])
+# Get all movies
+@app.get('/movies', 
+         tags=['movies'], 
+         response_model=List[Movie], 
+         status_code=200, 
+         dependencies=[Depends(JWTBearer())],
+         summary="Show all Movies")
 def get_movies() -> List[Movie]:
-    return JSONResponse(status_code=200, content=movies)
+    db = Session()
+    result = db.query(MovieModel).all()
+    return JSONResponse(status_code=200, content=jsonable_encoder(result))
 
-@app.get('/movies/{id}', tags=['movies'], response_model=Movie)
+
+# Get a movie
+@app.get('/movies/{id}', tags=['movies'], response_model=Movie,summary="Show a movie")
 def get_movie(id: int = Path(ge=1, le=2000)) -> Movie:
-    for item in movies:
-        if item["id"] == id:
-            return JSONResponse(content=item)
-    return JSONResponse(status_code=404, content=[])
+    
+    db = Session()
+    result = db.query(MovieModel).filter(MovieModel.id == id).first()
+    if not result:
+        return JSONResponse(status_code=404,content={'message': 'Movie not found'})
+    else:
+        return JSONResponse(status_code=200, content=jsonable_encoder(result))
 
+
+# Show movies by category
 @app.get('/movies/', tags=['movies'], response_model=List[Movie])
 def get_movies_by_category(category: str = Query(min_length=5, max_length=15)) -> List[Movie]:
-    data = [ item for item in movies if item['category'] == category ]
-    return JSONResponse(content=data)
+    db = Session()
+    result = db.query(MovieModel).filter(MovieModel.category == category).all()
+    if not result:
+        return JSONResponse(status_code=404,content={'message': 'Movie/s not found'})
+    else:
+        return JSONResponse(status_code=200, content=jsonable_encoder(result))
 
 @app.post('/movies', tags=['movies'], response_model=dict, status_code=201)
 def create_movie(movie: Movie) -> dict:
-    movies.append(movie)
+    
+    db = Session()
+    new_movie = MovieModel(**movie.dict())
+    db.add(new_movie)
+    db.commit()
+  
     return JSONResponse(status_code=201, content={"message": "Se ha registrado la película"})
 
 @app.put('/movies/{id}', tags=['movies'], response_model=dict, status_code=200)
